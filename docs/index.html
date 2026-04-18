@@ -134,6 +134,7 @@
       background: #e3e8ee;
       border: 1px solid #d6dde5;
       overflow: hidden;
+      cursor: pointer;
     }
 
     .timeframe-track input[type="range"] {
@@ -457,6 +458,33 @@
       rangeEndEl.addEventListener("input", () => {
         const e = Number(rangeEndEl.value);
         setWindow(viewStart, e);
+      });
+
+      timeframeTrackEl.addEventListener("pointerdown", (event) => {
+        const target = event.target;
+        if (target === rangeStartEl || target === rangeEndEl) {
+          return;
+        }
+        if (!fullRows.length) {
+          return;
+        }
+        const rect = timeframeTrackEl.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+        const maxIndex = fullRows.length - 1;
+        const clickedIndex = Math.round(ratio * maxIndex);
+        const span = viewEnd - viewStart;
+        const half = Math.floor(span / 2);
+        let newStart = clickedIndex - half;
+        let newEnd = newStart + span;
+        if (newStart < 0) {
+          newStart = 0;
+          newEnd = span;
+        }
+        if (newEnd > maxIndex) {
+          newEnd = maxIndex;
+          newStart = Math.max(0, newEnd - span);
+        }
+        setWindow(newStart, newEnd);
       });
     }
 
