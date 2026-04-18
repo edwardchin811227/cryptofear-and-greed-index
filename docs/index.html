@@ -111,6 +111,76 @@
       color: var(--muted);
       font-size: 12px;
     }
+
+    .timeframe-bar {
+      padding: 10px 22px 18px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .timeframe-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .timeframe-track {
+      position: relative;
+      height: 34px;
+      border-radius: 999px;
+      background: #e3e8ee;
+      border: 1px solid #d6dde5;
+      overflow: hidden;
+    }
+
+    .timeframe-track input[type="range"] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 34px;
+      margin: 0;
+      appearance: none;
+      background: transparent;
+      pointer-events: none;
+    }
+
+    .timeframe-track input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+      pointer-events: auto;
+      cursor: ew-resize;
+    }
+
+    .timeframe-track input[type="range"]::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+      pointer-events: auto;
+      cursor: ew-resize;
+    }
+
+    .timeframe-track input[type="range"]::-webkit-slider-runnable-track {
+      height: 34px;
+      background: transparent;
+    }
+
+    .timeframe-track input[type="range"]::-moz-range-track {
+      height: 34px;
+      background: transparent;
+      border: none;
+    }
   </style>
 </head>
 <body>
@@ -139,6 +209,17 @@
     <div class="footnote">
       Data source: Alternative.me Fear & Greed API · Rolling window: 250 days · std(ddof=1)
     </div>
+
+    <div class="timeframe-bar">
+      <div class="timeframe-head">
+        <span>Timeframe</span>
+        <span id="timeframeLabel">--</span>
+      </div>
+      <div class="timeframe-track" id="timeframeTrack">
+        <input id="rangeStart" type="range" min="0" max="0" value="0">
+        <input id="rangeEnd" type="range" min="0" max="0" value="0">
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -147,10 +228,19 @@
     const latestValueEl = document.getElementById("latestValue");
     const latestClassEl = document.getElementById("latestClass");
     const metaTextEl = document.getElementById("metaText");
+    const timeframeTrackEl = document.getElementById("timeframeTrack");
+    const timeframeLabelEl = document.getElementById("timeframeLabel");
+    const rangeStartEl = document.getElementById("rangeStart");
+    const rangeEndEl = document.getElementById("rangeEnd");
     const ctx = document.getElementById("chart").getContext("2d");
     let fullRows = [];
     let chart = null;
-    let selectedRange = "ALL";
+    let viewStart = 0;
+    let viewEnd = 0;
+
+    function getMinWindowSize() {
+      return Math.min(5, Math.max(1, fullRows.length));
+    }
 
     function clampBand(v) {
       if (v === null || v === undefined || Number.isNaN(v)) return null;
@@ -172,23 +262,125 @@
       };
     }
 
-    function pickRows(rows, rangeName) {
-      if (rangeName === "ALL") return rows;
+    function pickRowsByWindow(rows, start, end) {
+      if (!rows.length) return [];
+      const s = Math.max(0, Math.min(start, rows.length - 1));
+      const e = Math.max(s, Math.min(end, rows.length - 1));
+      return rows.slice(s, e + 1);
+    }
+
+    function updateTimeframeTrackStyle() {
+      const n = fullRows.length;
+      if (n <= 1) {
+        timeframeTrackEl.style.background = "#e3e8ee";
+        return;
+      }
+      const p1 = (viewStart / (n - 1)) * 100;
+      const p2 = (viewEnd / (n - 1)) * 100;
+      timeframeTrackEl.style.background =
+        `linear-gradient(to right, #e3e8ee 0%, #e3e8ee ${p1}%, #2d5d7b ${p1}%, #2d5d7b ${p2}%, #e3e8ee ${p2}%, #e3e8ee 100%)`;
+    }
+
+    function updateTimeframeLabel() {
+      if (!fullRows.length) {
+        timeframeLabelEl.textContent = "--";
+        return;
+      }
+      const from = fullRows[viewStart].date;
+      const to = fullRows[viewEnd].date;
+      const days = viewEnd - viewStart + 1;
+      timeframeLabelEl.textContent = `${from} ~ ${to} (${days}d)`;
+    }
+
+    function syncActiveButton() {
+      const n = fullRows.length;
+      let activeRange = "";
+      if (viewStart === 0 && viewEnd === n - 1) {
+        activeRange = "ALL";
+      } else if (viewEnd === n - 1 && viewStart === Math.max(0, n - 365)) {
+        activeRange = "1Y";
+      } else if (viewEnd === n - 1 && viewStart === Math.max(0, n - 730)) {
+        activeRange = "2Y";
+      }
+      rangeButtons.forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.range === activeRange);
+      });
+    }
+
+    function updateSliderControls() {
+      const max = Math.max(0, fullRows.length - 1);
+      rangeStartEl.max = String(max);
+      rangeEndEl.max = String(max);
+      rangeStartEl.value = String(viewStart);
+      rangeEndEl.value = String(viewEnd);
+      updateTimeframeTrackStyle();
+      updateTimeframeLabel();
+      syncActiveButton();
+    }
+
+    function setWindow(start, end) {
+      if (!fullRows.length) return;
+      const n = fullRows.length;
+      const minWindow = getMinWindowSize();
+      let s = Math.max(0, Math.min(start, n - 1));
+      let e = Math.max(0, Math.min(end, n - 1));
+      if (e - s + 1 < minWindow) {
+        if (s + minWindow - 1 <= n - 1) {
+          e = s + minWindow - 1;
+        } else {
+          s = Math.max(0, e - minWindow + 1);
+        }
+      }
+      viewStart = s;
+      viewEnd = e;
+      updateSliderControls();
+      refreshView(false);
+    }
+
+    function setWindowByRangeName(rangeName) {
+      if (!fullRows.length) return;
+      const n = fullRows.length;
+      if (rangeName === "ALL") {
+        setWindow(0, n - 1);
+        return;
+      }
       const days = rangeName === "1Y" ? 365 : 730;
-      if (rows.length <= days) return rows;
-      return rows.slice(rows.length - days);
+      setWindow(Math.max(0, n - days), n - 1);
     }
 
     function createOrUpdateChart(rows) {
       const d = toDataset(rows);
-      const commonSpan = { pointRadius: 0, borderWidth: 0, tension: 0.12 };
       const datasets = [
-        { label: "+3σ", data: d.upper3, borderWidth: 0, pointRadius: 0, fill: false },
-        { label: "-3σ", data: d.lower3, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(206, 62, 62, 0.14)" },
-        { label: "+2σ", data: d.upper2, borderWidth: 0, pointRadius: 0, fill: false },
-        { label: "-2σ", data: d.lower2, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(247, 183, 49, 0.18)" },
-        { label: "+1σ", data: d.upper1, borderWidth: 0, pointRadius: 0, fill: false },
-        { label: "-1σ", data: d.lower1, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(69, 172, 78, 0.22)" },
+        {
+          label: "_mean_anchor_pos",
+          data: d.mean250,
+          borderWidth: 0,
+          pointRadius: 0,
+          borderColor: "rgba(0,0,0,0)",
+          backgroundColor: "rgba(0,0,0,0)",
+          fill: false,
+          tension: 0.12,
+          skipLegend: true,
+          skipTooltip: true
+        },
+        { label: "+1σ", data: d.upper1, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(74, 173, 97, 0.30)", tension: 0.12 },
+        { label: "+2σ", data: d.upper2, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(74, 173, 97, 0.22)", tension: 0.12 },
+        { label: "+3σ", data: d.upper3, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(74, 173, 97, 0.14)", tension: 0.12 },
+        {
+          label: "_mean_anchor_neg",
+          data: d.mean250,
+          borderWidth: 0,
+          pointRadius: 0,
+          borderColor: "rgba(0,0,0,0)",
+          backgroundColor: "rgba(0,0,0,0)",
+          fill: false,
+          tension: 0.12,
+          skipLegend: true,
+          skipTooltip: true
+        },
+        { label: "-1σ", data: d.lower1, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(217, 83, 79, 0.30)", tension: 0.12 },
+        { label: "-2σ", data: d.lower2, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(217, 83, 79, 0.22)", tension: 0.12 },
+        { label: "-3σ", data: d.lower3, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(217, 83, 79, 0.14)", tension: 0.12 },
         { label: "250MA", data: d.mean250, borderColor: "#2d5d7b", borderDash: [6, 5], pointRadius: 0, borderWidth: 2, fill: false, tension: 0.12 },
         { label: "FNG Value", data: d.value, borderColor: "#111111", pointRadius: 0, borderWidth: 2, fill: false, tension: 0.12 }
       ];
@@ -207,8 +399,19 @@
           maintainAspectRatio: false,
           interaction: { mode: "index", intersect: false },
           plugins: {
-            legend: { labels: { usePointStyle: true, boxWidth: 8 } },
+            legend: {
+              labels: {
+                usePointStyle: true,
+                boxWidth: 8,
+                filter(item, data) {
+                  return !data.datasets[item.datasetIndex].skipLegend;
+                }
+              }
+            },
             tooltip: {
+              filter(context) {
+                return !context.dataset.skipTooltip;
+              },
               callbacks: {
                 title(items) {
                   return items[0] ? items[0].label : "";
@@ -229,19 +432,31 @@
       });
     }
 
-    function refreshView() {
-      const subset = pickRows(fullRows, selectedRange);
+    function refreshView(updateControls = true) {
+      const subset = pickRowsByWindow(fullRows, viewStart, viewEnd);
       createOrUpdateChart(subset);
+      if (updateControls) {
+        updateSliderControls();
+      }
     }
 
     function bindRangeButtons() {
       rangeButtons.forEach(btn => {
         btn.addEventListener("click", () => {
-          selectedRange = btn.dataset.range;
-          rangeButtons.forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-          refreshView();
+          setWindowByRangeName(btn.dataset.range);
         });
+      });
+    }
+
+    function bindTimeframeBar() {
+      rangeStartEl.addEventListener("input", () => {
+        const s = Number(rangeStartEl.value);
+        setWindow(s, viewEnd);
+      });
+
+      rangeEndEl.addEventListener("input", () => {
+        const e = Number(rangeEndEl.value);
+        setWindow(viewStart, e);
       });
     }
 
@@ -261,10 +476,14 @@
       latestValueEl.textContent = `Latest: ${latest.value}`;
       latestClassEl.textContent = `Classification: ${latest.classification || "N/A"}`;
       metaTextEl.textContent = `Updated: ${payload.updated || "N/A"} · Rows: ${fullRows.length}`;
-      refreshView();
+      viewStart = 0;
+      viewEnd = fullRows.length - 1;
+      updateSliderControls();
+      refreshView(false);
     }
 
     bindRangeButtons();
+    bindTimeframeBar();
     boot().catch(err => {
       metaTextEl.textContent = `Error: ${err.message}`;
       console.error(err);
@@ -273,4 +492,3 @@
   </script>
 </body>
 </html>
-
