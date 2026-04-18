@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Fear & Greed Index - 250MA ±σ</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --panel: #ffffff;
+      --text: #15212d;
+      --muted: #5f6f7b;
+      --line: #d3dce3;
+      --accent: #2d5d7b;
+      --sigma1: rgba(69, 172, 78, 0.22);
+      --sigma2: rgba(247, 183, 49, 0.18);
+      --sigma3: rgba(206, 62, 62, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 10% -10%, #dde8f0 0, transparent 42%), var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+    }
+
+    .wrap {
+      width: 1200px;
+      margin: 22px auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 12px 30px rgba(21, 33, 45, 0.08);
+      overflow: hidden;
+    }
+
+    header {
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.2px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    .summary {
+      display: flex;
+      gap: 14px;
+      padding: 14px 22px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font-size: 13px;
+      background: #fbfdff;
+    }
+
+    .toolbar {
+      padding: 10px 22px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .toolbar button {
+      border: 1px solid var(--line);
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 6px 14px;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .toolbar button.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .canvas-box {
+      padding: 16px 18px 10px;
+      height: 620px;
+    }
+
+    #chart {
+      width: 100%;
+      height: 100%;
+    }
+
+    .footnote {
+      padding: 0 22px 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Crypto Fear & Greed Index · 250MA ±σ</h1>
+      <div class="meta" id="metaText">Loading...</div>
+    </header>
+
+    <div class="summary">
+      <div class="pill" id="latestValue">Latest: --</div>
+      <div class="pill" id="latestClass">Classification: --</div>
+      <div class="pill">Y Axis: 0-100 (σ band display clamped)</div>
+    </div>
+
+    <div class="toolbar">
+      <button data-range="1Y">1Y</button>
+      <button data-range="2Y">2Y</button>
+      <button data-range="ALL" class="active">ALL</button>
+    </div>
+
+    <div class="canvas-box">
+      <canvas id="chart"></canvas>
+    </div>
+
+    <div class="footnote">
+      Data source: Alternative.me Fear & Greed API · Rolling window: 250 days · std(ddof=1)
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const rangeButtons = Array.from(document.querySelectorAll(".toolbar button"));
+    const latestValueEl = document.getElementById("latestValue");
+    const latestClassEl = document.getElementById("latestClass");
+    const metaTextEl = document.getElementById("metaText");
+    const ctx = document.getElementById("chart").getContext("2d");
+    let fullRows = [];
+    let chart = null;
+    let selectedRange = "ALL";
+
+    function clampBand(v) {
+      if (v === null || v === undefined || Number.isNaN(v)) return null;
+      return Math.max(0, Math.min(100, v));
+    }
+
+    function toDataset(rows) {
+      const labels = rows.map(r => r.date);
+      return {
+        labels,
+        value: rows.map(r => r.value),
+        mean250: rows.map(r => r.mean250),
+        upper1: rows.map(r => clampBand(r.upper1)),
+        lower1: rows.map(r => clampBand(r.lower1)),
+        upper2: rows.map(r => clampBand(r.upper2)),
+        lower2: rows.map(r => clampBand(r.lower2)),
+        upper3: rows.map(r => clampBand(r.upper3)),
+        lower3: rows.map(r => clampBand(r.lower3))
+      };
+    }
+
+    function pickRows(rows, rangeName) {
+      if (rangeName === "ALL") return rows;
+      const days = rangeName === "1Y" ? 365 : 730;
+      if (rows.length <= days) return rows;
+      return rows.slice(rows.length - days);
+    }
+
+    function createOrUpdateChart(rows) {
+      const d = toDataset(rows);
+      const commonSpan = { pointRadius: 0, borderWidth: 0, tension: 0.12 };
+      const datasets = [
+        { label: "+3σ", data: d.upper3, borderWidth: 0, pointRadius: 0, fill: false },
+        { label: "-3σ", data: d.lower3, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(206, 62, 62, 0.14)" },
+        { label: "+2σ", data: d.upper2, borderWidth: 0, pointRadius: 0, fill: false },
+        { label: "-2σ", data: d.lower2, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(247, 183, 49, 0.18)" },
+        { label: "+1σ", data: d.upper1, borderWidth: 0, pointRadius: 0, fill: false },
+        { label: "-1σ", data: d.lower1, borderWidth: 0, pointRadius: 0, fill: "-1", backgroundColor: "rgba(69, 172, 78, 0.22)" },
+        { label: "250MA", data: d.mean250, borderColor: "#2d5d7b", borderDash: [6, 5], pointRadius: 0, borderWidth: 2, fill: false, tension: 0.12 },
+        { label: "FNG Value", data: d.value, borderColor: "#111111", pointRadius: 0, borderWidth: 2, fill: false, tension: 0.12 }
+      ];
+
+      if (chart) {
+        chart.data.labels = d.labels;
+        chart.data.datasets = datasets;
+        chart.update();
+        return;
+      }
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: { labels: d.labels, datasets },
+        options: {
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { labels: { usePointStyle: true, boxWidth: 8 } },
+            tooltip: {
+              callbacks: {
+                title(items) {
+                  return items[0] ? items[0].label : "";
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 14 } },
+            y: {
+              min: 0,
+              max: 100,
+              ticks: { stepSize: 10 },
+              title: { display: true, text: "Index (0-100)" }
+            }
+          }
+        }
+      });
+    }
+
+    function refreshView() {
+      const subset = pickRows(fullRows, selectedRange);
+      createOrUpdateChart(subset);
+    }
+
+    function bindRangeButtons() {
+      rangeButtons.forEach(btn => {
+        btn.addEventListener("click", () => {
+          selectedRange = btn.dataset.range;
+          rangeButtons.forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          refreshView();
+        });
+      });
+    }
+
+    async function boot() {
+      const res = await fetch("./fng_data.json", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`Failed to load fng_data.json: HTTP ${res.status}`);
+      }
+
+      const payload = await res.json();
+      fullRows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (fullRows.length === 0) {
+        throw new Error("fng_data.json has no rows");
+      }
+
+      const latest = fullRows[fullRows.length - 1];
+      latestValueEl.textContent = `Latest: ${latest.value}`;
+      latestClassEl.textContent = `Classification: ${latest.classification || "N/A"}`;
+      metaTextEl.textContent = `Updated: ${payload.updated || "N/A"} · Rows: ${fullRows.length}`;
+      refreshView();
+    }
+
+    bindRangeButtons();
+    boot().catch(err => {
+      metaTextEl.textContent = `Error: ${err.message}`;
+      console.error(err);
+      alert("無法載入 fng_data.json，請先執行資料更新腳本。");
+    });
+  </script>
+</body>
+</html>
+
